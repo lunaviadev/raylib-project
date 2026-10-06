@@ -1,18 +1,3 @@
-/*
- * TIMESEED
- * A small 3D roguelike written in C with raylib.
- *
- * Your computer's clock is the seed: the title screen shows the current Unix
- * time ticking every second, and whatever second you press ENTER on becomes
- * the run's seed. The same seed always builds the same dungeon, so any run can
- * be replayed (R) or shared with someone else (type it in with T).
- *
- * The seed is also read back as a time of day, and that sets the mood of the
- * run: a seed taken at night gives you a smaller light radius and more enemies.
- *
- * Graphics are monochrome only (black, white and greys).
- */
-
 #include "raylib.h"
 #include "raymath.h"
 
@@ -38,21 +23,15 @@ enum { TILE_WALL, TILE_FLOOR, TILE_STAIRS };
 enum { SCREEN_TITLE, SCREEN_PLAY, SCREEN_DEAD, SCREEN_WIN };
 enum { ENEMY_CRAWLER, ENEMY_BRUTE };
 
-//----------------------------------------------------------------------------
-// Seeded random numbers
-// Our own generator (xorshift32) so the same seed gives the same dungeon on
-// any machine, independent of the C library's rand().
-//----------------------------------------------------------------------------
 typedef struct { uint32_t state; } Rng;
 
 static void RngSeed(Rng *r, uint32_t seed)
 {
-    // Scramble the seed so seeds one second apart still look very different
     uint32_t z = seed + 0x9E3779B9u;
     z = (z ^ (z >> 16)) * 0x85EBCA6Bu;
     z = (z ^ (z >> 13)) * 0xC2B2AE35u;
     z ^= z >> 16;
-    r->state = z ? z : 1;    // xorshift must never be zero
+    r->state = z ? z : 1;
 }
 
 static uint32_t RngNext(Rng *r)
@@ -64,15 +43,11 @@ static uint32_t RngNext(Rng *r)
     return r->state = x;
 }
 
-// Random int in [min, max] inclusive
 static int RngRange(Rng *r, int min, int max)
 {
     return min + (int)(RngNext(r) % (uint32_t)(max - min + 1));
 }
 
-//----------------------------------------------------------------------------
-// Game data
-//----------------------------------------------------------------------------
 typedef struct { int x, y, w, h; } Room;
 
 typedef struct {
@@ -80,22 +55,22 @@ typedef struct {
     int hp, maxHp, atk;
     int type;
     bool alive;
-    Vector3 draw;       // smoothed position used for rendering
-    float flash;        // > 0 while showing a hit flash
+    Vector3 draw;
+    float flash;
 } Enemy;
 
 typedef struct { int x, y; bool taken; } Item;
 
 typedef struct {
     const char *name;
-    int light;          // view radius in tiles
+    int light;
     int extraEnemies;
 } DayPhase;
 
 typedef struct {
     uint32_t seed;
     DayPhase phase;
-    char seedTime[8];   // "HH:MM" the seed decodes to
+    char seedTime[8];
 
     int floor;
     int turn;
@@ -119,13 +94,10 @@ typedef struct {
     float pFlash;
     float shake;
 
-    char log[MAX_LOG][80];  // log[0] oldest, log[MAX_LOG-1] newest
+    char log[MAX_LOG][80];
     Rng rng;
 } Game;
 
-//----------------------------------------------------------------------------
-// Helpers
-//----------------------------------------------------------------------------
 static Color Grey(int v)
 {
     if (v < 0) v = 0;
@@ -193,15 +165,11 @@ static bool IsFree(const Game *g, int x, int y)
     return Walkable(g, x, y) && EnemyAt(g, x, y) < 0 && !(x == g->px && y == g->py);
 }
 
-//----------------------------------------------------------------------------
-// Dungeon generation
-//----------------------------------------------------------------------------
 static bool RoomOverlaps(const Game *g, Room r)
 {
     for (int i = 0; i < g->roomCount; i++)
     {
         Room o = g->rooms[i];
-        // keep at least one wall tile between rooms
         if (r.x - 1 < o.x + o.w && r.x + r.w + 1 > o.x &&
             r.y - 1 < o.y + o.h && r.y + r.h + 1 > o.y) return true;
     }
@@ -225,7 +193,6 @@ static void CarveColumn(Game *g, int y1, int y2, int x)
     for (int y = y1; y <= y2; y++) CarveFloor(g, x, y);
 }
 
-// L-shaped corridor, the bend direction picked by the seed
 static void CarveCorridor(Game *g, int x1, int y1, int x2, int y2)
 {
     if (RngRange(&g->rng, 0, 1)) { CarveRow(g, x1, x2, y1); CarveColumn(g, y1, y2, x2); }
@@ -242,7 +209,6 @@ static void ComputeVisibility(Game *g);
 
 static void GenerateFloor(Game *g)
 {
-    // Each floor has its own stream, so floor N of a seed is always the same
     RngSeed(&g->rng, g->seed ^ ((uint32_t)g->floor * 0x27D4EB2Du));
 
     memset(g->tiles, TILE_WALL, sizeof(g->tiles));
@@ -251,7 +217,6 @@ static void GenerateFloor(Game *g)
     g->enemyCount = 0;
     g->itemCount = 0;
 
-    // Rooms, each joined to the previous one by a corridor
     for (int attempt = 0; attempt < 400 && g->roomCount < MAX_ROOMS; attempt++)
     {
         Room r;
@@ -272,14 +237,12 @@ static void GenerateFloor(Game *g)
         g->rooms[g->roomCount++] = r;
     }
 
-    // Player starts in the first room, stairs go in the last one
     Room first = g->rooms[0];
     Room last = g->rooms[g->roomCount - 1];
     g->px = first.x + first.w/2;
     g->py = first.y + first.h/2;
     g->tiles[last.y + last.h/2][last.x + last.w/2] = TILE_STAIRS;
 
-    // Enemies (never in the starting room)
     int wanted = 3 + g->floor + g->phase.extraEnemies;
     if (wanted > MAX_ENEMIES) wanted = MAX_ENEMIES;
     for (int i = 0; i < wanted && g->roomCount > 1; i++)
@@ -301,7 +264,6 @@ static void GenerateFloor(Game *g)
         e->draw = (Vector3){ (float)x, 0.0f, (float)y };
     }
 
-    // Health potions
     int potions = 2 + RngRange(&g->rng, 0, 1);
     for (int i = 0; i < potions && g->itemCount < MAX_ITEMS; i++)
     {
@@ -333,9 +295,6 @@ static void InitRun(Game *g, uint32_t seed)
     AddLog(g, "Find the stairs. Reach floor %d to escape.", FINAL_FLOOR);
 }
 
-//----------------------------------------------------------------------------
-// Field of view
-//----------------------------------------------------------------------------
 static bool LineOfSight(const Game *g, int x0, int y0, int x1, int y1)
 {
     int dx = abs(x1 - x0), dy = -abs(y1 - y0);
@@ -348,7 +307,7 @@ static bool LineOfSight(const Game *g, int x0, int y0, int x1, int y1)
         int e2 = 2*err;
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
-        if (x0 == x1 && y0 == y1) return true;      // the wall you look at is visible
+        if (x0 == x1 && y0 == y1) return true;
         if (g->tiles[y0][x0] == TILE_WALL) return false;
     }
 }
@@ -373,9 +332,6 @@ static void ComputeVisibility(Game *g)
     }
 }
 
-//----------------------------------------------------------------------------
-// Turns
-//----------------------------------------------------------------------------
 static void EnemyStep(Game *g, Enemy *e, int sx, int sy)
 {
     if ((sx || sy) && IsFree(g, e->x + sx, e->y + sy)) { e->x += sx; e->y += sy; }
@@ -387,7 +343,7 @@ static void EnemiesTakeTurn(Game *g)
     {
         Enemy *e = &g->enemies[i];
         if (!e->alive) continue;
-        if (e->type == ENEMY_BRUTE && (g->turn % 2)) continue;   // brutes are slow
+        if (e->type == ENEMY_BRUTE && (g->turn % 2)) continue;
 
         int ddx = g->px - e->x, ddy = g->py - e->y;
 
@@ -412,7 +368,6 @@ static void EnemiesTakeTurn(Game *g)
 
         if (g->visible[e->y][e->x])
         {
-            // If you can see it, it can see you: chase along the longer axis first
             int ox = e->x, oy = e->y;
             if (abs(ddx) >= abs(ddy)) { EnemyStep(g, e, sx, 0); if (e->x == ox) EnemyStep(g, e, 0, sy); }
             else                      { EnemyStep(g, e, 0, sy); if (e->y == oy) EnemyStep(g, e, sx, 0); }
@@ -444,7 +399,6 @@ static void Descend(Game *g)
     AddLog(g, "You descend to floor %d.", g->floor);
 }
 
-// dx = dy = 0 means wait a turn
 static void PlayerTakeTurn(Game *g, int dx, int dy)
 {
     if (dx || dy)
@@ -468,7 +422,7 @@ static void PlayerTakeTurn(Game *g, int dx, int dy)
         }
         else if (!Walkable(g, nx, ny))
         {
-            return;     // bumping into a wall does not use a turn
+            return;
         }
         else
         {
@@ -501,9 +455,6 @@ static void PlayerTakeTurn(Game *g, int dx, int dy)
     ComputeVisibility(g);
 }
 
-//----------------------------------------------------------------------------
-// 3D drawing
-//----------------------------------------------------------------------------
 static bool IsEdgeWall(const Game *g, int x, int y)
 {
     for (int dy = -1; dy <= 1; dy++)
@@ -512,7 +463,6 @@ static bool IsEdgeWall(const Game *g, int x, int y)
     return false;
 }
 
-// revealAll draws the whole map as wireframe (used for the title screen preview)
 static void DrawWorld(const Game *g, bool revealAll, float time)
 {
     float reach = (float)g->phase.light + 0.5f;
@@ -527,15 +477,12 @@ static void DrawWorld(const Game *g, bool revealAll, float time)
             if (!revealAll && !g->seen[y][x]) continue;
             if (t == TILE_WALL && !IsEdgeWall(g, x, y)) continue;
 
-            // Fake fog: tiles get darker the further they are from the player
             float d = Vector2Distance((Vector2){ (float)x, (float)y }, (Vector2){ g->pDraw.x, g->pDraw.z });
             float f = Clamp(1.0f - d/reach, 0.0f, 1.0f);
 
             if (t == TILE_WALL)
             {
                 Vector3 p = { (float)x, 0.5f, (float)y };
-
-                // Walls right in front of the camera are see-through so they never hide the player
                 bool inFront = !revealAll && y > g->pDraw.z && y - g->pDraw.z < 2.5f && fabsf(x - g->pDraw.x) < 1.5f;
                 if (vis && inFront) DrawCubeWires(p, 1.0f, 1.0f, 1.0f, Grey(30 + (int)(225*f)));
                 else if (vis)
@@ -555,7 +502,7 @@ static void DrawWorld(const Game *g, bool revealAll, float time)
             {
                 Color c = (vis || revealAll) ? WHITE : Grey(80);
                 DrawCubeWires((Vector3){ (float)x, 0.02f, (float)y }, 0.8f, 0.04f, 0.8f, c);
-                if (vis || revealAll)   // spinning arrow pointing down
+                if (vis || revealAll)
                     DrawCylinderWires((Vector3){ (float)x, 0.25f + bob, (float)y }, 0.0f, 0.3f, 0.5f, 4 + (int)(time*4) % 3, WHITE);
             }
         }
@@ -585,7 +532,6 @@ static void DrawWorld(const Game *g, bool revealAll, float time)
         DrawCubeV(p, size, body);
         DrawCubeWires(p, size.x, size.y, size.z, edge);
 
-        // Two little eyes facing the camera
         float eyeY = p.y + size.y*0.2f, eyeZ = p.z + size.z/2 + 0.01f;
         DrawCube((Vector3){ p.x - 0.12f, eyeY, eyeZ }, 0.08f, 0.08f, 0.02f, edge);
         DrawCube((Vector3){ p.x + 0.12f, eyeY, eyeZ }, 0.08f, 0.08f, 0.02f, edge);
@@ -601,9 +547,6 @@ static void DrawWorld(const Game *g, bool revealAll, float time)
     }
 }
 
-//----------------------------------------------------------------------------
-// 2D UI
-//----------------------------------------------------------------------------
 static void DrawTextCentered(const char *text, int y, int size, Color color)
 {
     DrawText(text, (GetScreenWidth() - MeasureText(text, size))/2, y, size, color);
@@ -633,7 +576,6 @@ static void DrawHud(const Game *g)
 {
     int w = GetScreenWidth(), h = GetScreenHeight();
 
-    // Top bar
     DrawRectangle(0, 0, w, 44, BLACK);
     DrawLine(0, 44, w, 44, WHITE);
     DrawText(TextFormat("SEED %u", g->seed), 16, 12, 20, WHITE);
@@ -646,7 +588,6 @@ static void DrawHud(const Game *g)
     const char *clock = TextFormat("%s %s  LIGHT %d", g->seedTime, g->phase.name, g->phase.light);
     DrawText(clock, w - MeasureText(clock, 20) - 16, 12, 20, WHITE);
 
-    // Message log, newest at the bottom and brightest
     for (int i = 0; i < MAX_LOG; i++)
     {
         int age = MAX_LOG - 1 - i;
@@ -656,7 +597,6 @@ static void DrawHud(const Game *g)
     const char *help = "WASD/ARROWS move   SPACE wait   R retry seed   N new seed   ESC menu";
     DrawText(help, w - MeasureText(help, 10) - 16, h - 22, 10, Grey(150));
 
-    // White border flash when you take damage
     if (g->pFlash > 0)
         DrawRectangleLinesEx((Rectangle){ 0, 0, (float)w, (float)h }, 30.0f*g->pFlash, WHITE);
 }
@@ -678,11 +618,8 @@ static void DrawEndPanel(const Game *g, bool won)
     DrawTextCentered("[R] retry this seed   [N] new seed   [ESC] menu", y + 210, 20, Grey(200));
 }
 
-//----------------------------------------------------------------------------
-// Main
-//----------------------------------------------------------------------------
 static Game game;
-static Game preview;    // floor 1 of the seed currently shown on the title screen
+static Game preview;
 
 static bool PressedOrRepeat(int key)
 {
@@ -694,7 +631,7 @@ int main(void)
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(SCREEN_W, SCREEN_H, "TIMESEED");
-    SetExitKey(KEY_NULL);   // ESC is handled per screen instead
+    SetExitKey(KEY_NULL);
     SetTargetFPS(60);
 
     Camera3D camera = { 0 };
@@ -704,7 +641,7 @@ int main(void)
 
     int screen = SCREEN_TITLE;
     uint32_t titleSeed = (uint32_t)time(NULL);
-    bool seedLocked = false;    // true once a seed has been typed in
+    bool seedLocked = false;
     bool typing = false;
     char typed[11] = { 0 };
     int typedLen = 0;
@@ -717,9 +654,6 @@ int main(void)
         float dt = GetFrameTime();
         float now = (float)GetTime();
 
-        //------------------------------------------------------------------
-        // Update
-        //------------------------------------------------------------------
         if (screen == SCREEN_TITLE)
         {
             if (typing)
@@ -742,7 +676,7 @@ int main(void)
             }
             else
             {
-                if (!seedLocked) titleSeed = (uint32_t)time(NULL);   // the seed ticks with the clock
+                if (!seedLocked) titleSeed = (uint32_t)time(NULL);
 
                 if (IsKeyPressed(KEY_ENTER)) { InitRun(&game, titleSeed); screen = SCREEN_PLAY; }
                 else if (IsKeyPressed(KEY_T)) { typing = true; typedLen = 0; typed[0] = '\0'; }
@@ -782,7 +716,6 @@ int main(void)
             else if (screen != SCREEN_PLAY && IsKeyPressed(KEY_ESCAPE)) screen = SCREEN_TITLE;
         }
 
-        // Animation: slide things towards their grid positions
         if (screen != SCREEN_TITLE)
         {
             float k = 1.0f - expf(-15.0f*dt);
@@ -797,27 +730,22 @@ int main(void)
             if (game.shake > 0) game.shake -= dt;
 
             Vector3 want = { game.pDraw.x, 0.0f, game.pDraw.z };
-            if (Vector3Distance(camera.target, want) > 4.0f) camera.target = want;   // snap on new floor
+            if (Vector3Distance(camera.target, want) > 4.0f) camera.target = want;
             camera.target = Vector3Lerp(camera.target, want, 1.0f - expf(-8.0f*dt));
             camera.position = Vector3Add(camera.target, (Vector3){ 0.0f, 13.0f, 6.0f });
             if (game.shake > 0)
             {
-                // Visual only, so it uses raylib's random and not the seeded one
                 camera.position.x += GetRandomValue(-10, 10)*0.01f*game.shake;
                 camera.position.y += GetRandomValue(-10, 10)*0.01f*game.shake;
             }
         }
         else
         {
-            // Slow orbit over the whole map
             float a = now*0.15f;
             camera.target = (Vector3){ MAP_W/2.0f, 0.0f, MAP_H/2.0f };
             camera.position = (Vector3){ MAP_W/2.0f + cosf(a)*38.0f, 34.0f, MAP_H/2.0f + sinf(a)*38.0f };
         }
 
-        //------------------------------------------------------------------
-        // Draw
-        //------------------------------------------------------------------
         BeginDrawing();
         ClearBackground(BLACK);
 
