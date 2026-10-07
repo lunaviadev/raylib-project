@@ -8,6 +8,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(PLATFORM_WEB)
+#include <emscripten/fetch.h>
+#endif
+
 #define SCREEN_W     1280
 #define SCREEN_H     720
 
@@ -115,17 +119,113 @@ static void AddLog(Game *g, const char *fmt, ...)
     va_end(args);
 }
 
+// The clock comes from the time.now API: it returns the current Unix time and the
+// UTC offset of the timezone it finds from your IP. Until it answers (or if it
+// can't be reached) the computer's own clock and timezone are used instead.
+#define TIME_API_URL "https://time.now/developer/api/ip"
+
+enum { TIME_FETCHING, TIME_API, TIME_LOCAL };
+
+static int timeSource = TIME_FETCHING;
+static long long clockOffset = 0;      // API time minus local time, in seconds
+static long long utcOffset = 0;        // seconds east of UTC for the API's timezone
+static char timeZone[48] = "";
+
+#if defined(PLATFORM_WEB)
+static bool JsonNumber(const char *json, const char *key, long long *out)
+{
+    char pattern[48];
+    snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return false;
+    *out = strtoll(p + strlen(pattern), NULL, 10);
+    return true;
+}
+
+static bool JsonString(const char *json, const char *key, char *out, int size)
+{
+    char pattern[48];
+    snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) return false;
+    p += strlen(pattern);
+    int n = 0;
+    while (p[n] && p[n] != '"' && n < size - 1) { out[n] = p[n]; n++; }
+    out[n] = '\0';
+    return true;
+}
+
+static void ApplyTimeResponse(const char *json)
+{
+    long long unixTime, rawOffset = 0, dstOffset = 0;
+    if (!JsonNumber(json, "unixtime", &unixTime)) { timeSource = TIME_LOCAL; return; }
+
+    JsonNumber(json, "raw_offset", &rawOffset);
+    if (strstr(json, "\"dst\":true")) JsonNumber(json, "dst_offset", &dstOffset);
+    if (!JsonString(json, "timezone", timeZone, sizeof(timeZone))) strcpy(timeZone, "UTC");
+
+    clockOffset = unixTime - (long long)time(NULL);
+    utcOffset = rawOffset + dstOffset;
+    timeSource = TIME_API;
+}
+
+static void OnTimeFetched(emscripten_fetch_t *fetch)
+{
+    char json[2048];
+    int n = (fetch->numBytes < (int)sizeof(json) - 1) ? (int)fetch->numBytes : (int)sizeof(json) - 1;
+    memcpy(json, fetch->data, n);
+    json[n] = '\0';
+    ApplyTimeResponse(json);
+    emscripten_fetch_close(fetch);
+}
+
+static void OnTimeFailed(emscripten_fetch_t *fetch)
+{
+    timeSource = TIME_LOCAL;
+    emscripten_fetch_close(fetch);
+}
+
+static void RequestTime(void)
+{
+    emscripten_fetch_attr_t attr;
+    emscripten_fetch_attr_init(&attr);
+    strcpy(attr.requestMethod, "GET");
+    attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
+    attr.timeoutMSecs = 5000;
+    attr.onsuccess = OnTimeFetched;
+    attr.onerror = OnTimeFailed;
+    emscripten_fetch(&attr, TIME_API_URL);
+}
+#else
+// The desktop build has no HTTP client, so it always uses the local clock
+static void RequestTime(void) { timeSource = TIME_LOCAL; }
+#endif
+
+static uint32_t ClockSeed(void)
+{
+    return (uint32_t)((long long)time(NULL) + clockOffset);
+}
+
+static struct tm *SeedTime(uint32_t seed)
+{
+    if (timeSource == TIME_API)
+    {
+        time_t t = (time_t)((long long)seed + utcOffset);
+        return gmtime(&t);
+    }
+    time_t t = (time_t)seed;
+    return localtime(&t);
+}
+
 static int SeedHour(uint32_t seed)
 {
-    time_t t = (time_t)seed;
-    struct tm *lt = localtime(&t);
+    struct tm *lt = SeedTime(seed);
     return lt ? lt->tm_hour : 12;
 }
 
 static void SeedDateString(uint32_t seed, const char *format, char *out, int size)
 {
-    time_t t = (time_t)seed;
-    struct tm *lt = localtime(&t);
+    struct tm *lt = SeedTime(seed);
     if (lt) strftime(out, size, format, lt);
     else snprintf(out, size, "??");
 }
@@ -630,9 +730,10 @@ int main(void)
 {
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
     SetTraceLogLevel(LOG_WARNING);
-    InitWindow(SCREEN_W, SCREEN_H, "TIMESEED");
+    InitWindow(SCREEN_W, SCREEN_H, "Dungeon of Time");
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
+    RequestTime();
 
     Camera3D camera = { 0 };
     camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
@@ -640,7 +741,7 @@ int main(void)
     camera.projection = CAMERA_PERSPECTIVE;
 
     int screen = SCREEN_TITLE;
-    uint32_t titleSeed = (uint32_t)time(NULL);
+    uint32_t titleSeed = ClockSeed();
     bool seedLocked = false;
     bool typing = false;
     char typed[11] = { 0 };
@@ -676,7 +777,7 @@ int main(void)
             }
             else
             {
-                if (!seedLocked) titleSeed = (uint32_t)time(NULL);
+                if (!seedLocked) titleSeed = ClockSeed();
 
                 if (IsKeyPressed(KEY_ENTER)) { InitRun(&game, titleSeed); screen = SCREEN_PLAY; }
                 else if (IsKeyPressed(KEY_T)) { typing = true; typedLen = 0; typed[0] = '\0'; }
@@ -710,7 +811,7 @@ int main(void)
             else if (IsKeyPressed(KEY_N))
             {
                 seedLocked = false;
-                InitRun(&game, (uint32_t)time(NULL));
+                InitRun(&game, ClockSeed());
                 screen = SCREEN_PLAY;
             }
             else if (screen != SCREEN_PLAY && IsKeyPressed(KEY_ESCAPE)) screen = SCREEN_TITLE;
@@ -764,7 +865,7 @@ int main(void)
             SeedDateString(titleSeed, "%d %b %Y   %H:%M:%S", date, sizeof(date));
             DayPhase phase = PhaseForHour(SeedHour(titleSeed));
 
-            DrawTextCentered("TIMESEED", h/2 - 160, 80, WHITE);
+            DrawTextCentered("DUNGEON OF TIME", h/2 - 160, 80, WHITE);
             DrawTextCentered("a roguelike seeded by your clock", h/2 - 70, 20, Grey(170));
 
             if (typing)
@@ -778,6 +879,11 @@ int main(void)
                 DrawTextCentered(TextFormat("%s   -   %s   -   LIGHT %d", date, phase.name, phase.light), h/2 + 30, 20, Grey(200));
                 DrawTextCentered(seedLocked ? "seed locked   [C] go back to the clock" : "the seed ticks every second - press ENTER to catch one",
                                  h/2 + 60, 20, Grey(130));
+
+                const char *source = (timeSource == TIME_API)      ? TextFormat("time from time.now api   -   %s", timeZone)
+                                   : (timeSource == TIME_FETCHING) ? "asking time.now for the time..."
+                                                                   : "time.now unreachable   -   using your computer's clock";
+                DrawTextCentered(source, h/2 + 90, 20, Grey(130));
                 DrawTextCentered("[ENTER] descend     [T] type a seed     [ESC] quit", h/2 + 130, 20, WHITE);
             }
         }

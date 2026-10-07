@@ -1,31 +1,3 @@
-# TIMESEED
-
-A 3D roguelike written in **C** with **raylib**, where your computer's clock is the seed.
-
-Black and white graphics, turn-based, 10 floors, and every run can be repeated exactly.
-
----
-
-## The idea
-
-Most roguelikes generate a random dungeon each time you play. TIMESEED uses the **current time on your computer** as the random seed.
-
-- The title screen shows the seed ticking up once a second, with a live wireframe preview of the dungeon that seed would build.
-- Press **ENTER** to catch a second. That number becomes your run's seed and builds every floor.
-- **Same seed means same dungeon.** Press **R** to replay a seed, or share the number and type it in with **T**.
-- The seed is also turned back into a **time of day**, and that changes the run:
-
-| Seed time     | Phase | Light radius | Extra enemies per floor |
-|---------------|-------|--------------|-------------------------|
-| 07:00 - 17:59 | DAY   | 8 tiles      | +0                      |
-| 05:00 - 06:59 | DAWN  | 6 tiles      | +1                      |
-| 18:00 - 20:59 | DUSK  | 6 tiles      | +1                      |
-| 21:00 - 04:59 | NIGHT | 5 tiles      | +3                      |
-
-So playing at night is harder: you see less and there are more enemies.
-
----
-
 ## How to play
 
 Find the stairs on each floor and go down. Get past **floor 10** to escape.
@@ -92,6 +64,30 @@ make run
 gcc main.c -o game.exe -std=c99 -Wall -Wextra -O2 -Iraylib/include -Lraylib/lib -lraylib -lopengl32 -lgdi32 -lwinmm
 ```
 
+### In the browser (Emscripten)
+
+The web build is already in `web/` (`index.html`, `index.js`, `index.wasm`). To rebuild it, run:
+
+```bat
+build_web.bat
+```
+
+That sets up emsdk from `C:\raylib\emsdk`, builds into `web/`, and makes `dungeon-of-time-web.zip` for itch.io. The `emcc` command it runs is:
+
+```sh
+emcc main.c -o web/index.html -std=gnu99 -Os -Wall -IC:/raylib/raylib/src C:/raylib/raylib/src/libraylib.web.a -DPLATFORM_WEB -sUSE_GLFW=3 -sASYNCIFY -sTOTAL_MEMORY=67108864 --shell-file C:/raylib/raylib/src/minshell.html
+```
+
+`-sASYNCIFY` lets the normal `while (!WindowShouldClose())` loop run in the browser without being rewritten.
+
+Browsers won't load `.wasm` from a `file://` page, so serve the folder:
+
+```sh
+python -m http.server 8000 --directory web
+```
+
+Then open http://localhost:8000.
+
 ---
 
 ## Project layout
@@ -99,6 +95,8 @@ gcc main.c -o game.exe -std=c99 -Wall -Wextra -O2 -Iraylib/include -Lraylib/lib 
 ```
 main.c              the whole game, written in C99
 build.bat           Windows build script
+build_web.bat       browser build script (Emscripten) + itch.io zip
+web/                compiled browser build
 Makefile            build with make
 README.md           this file
 raylib/include/     raylib.h, raymath.h, rlgl.h
@@ -110,88 +108,30 @@ raylib is in the repo so the project builds on any Windows machine with GCC, wit
 
 ---
 
-## How the code works
+# Dev Log: Dungeon of Time
 
-Everything is in `main.c`, in this order.
+![Dungeon of Time running in the browser](WEBGIF.gif)
+game running in web
 
-### 1. Random numbers
+https://lunavia.itch.io/dungeon-of-time
+password to access website is : UCAPW123
 
-| Function    | What it does |
-|-------------|--------------|
-| `RngSeed`   | Mixes the seed number so seeds one second apart still give very different dungeons |
-| `RngNext`   | xorshift32: produces the next random 32-bit number |
-| `RngRange`  | Random whole number between a min and max (inclusive) |
+## The plan
 
-The game uses its own generator, not C's `rand()`. That way a seed gives exactly the same results on any computer.
+When I first read the brief I wanted something small that still felt like a proper game, so I went with a roguelike. The hook came pretty quickly: what if the dungeon was seeded by the time on your clock? That way the data isn't just decoration. It decides the whole run, from the layout to the enemies to how dark it is. Playing at night gives you a smaller light radius and more enemies, so real-world data changes the mechanics, not just the background.
 
-### 2. Data
+## Starting in 2D
 
-- `Game` holds the whole state of a run: seed, floor, map tiles, which tiles are seen or visible, rooms, enemies, potions, player stats, and the message log.
-- `Enemy`, `Item` and `Room` are the smaller pieces inside it.
-- `DayPhase` stores the light radius and extra enemy count for the seed's time of day.
+I prototyped everything in 2D first, which was honestly the right call, because the hard part of a roguelike is the systems, not the visuals. I got room placement, corridors, turn-based movement, combat and field of view working with just coloured squares. Field of view took the longest. I used Bresenham's line algorithm to check line of sight to each tile, which I'd heard of before but never actually implemented. I also had to add a real web request. My first choice, worldtimeapi.org, failed in the browser because of CORS, so I switched to time.now, which returns the time and UTC offset for your location. I used Emscripten's fetch API so the request runs in the background, with the computer's clock as a fallback if it fails.
 
-### 3. Time of day
+## Moving to 3D
 
-| Function         | What it does |
-|------------------|--------------|
-| `SeedHour`       | Treats the seed as a Unix timestamp and gets the hour from it with `localtime()` |
-| `SeedDateString` | Formats the seed as a date and time for the title screen and HUD |
-| `PhaseForHour`   | Picks DAY / DAWN / DUSK / NIGHT for that hour |
+Once it was playable it felt a bit flat, and raylib makes basic 3D pretty approachable, so I decided to move it to 3D. Because all the logic was grid-based, the swap was mostly a rendering change: tiles became cubes, the player became a sphere, and a camera follows behind. The real problems were about readability. Walls kept hiding the player, so I made walls near the camera draw as wireframes. I faked fog by fading walls to dark with distance, and kept everything black and white so it looked deliberate rather than unfinished. I also added smooth sliding between squares so movement didn't feel like teleporting.
 
-### 4. Dungeon generation
+## Getting it in the browser
 
-`GenerateFloor` builds one floor:
+The web build was where most of my unexpected time went. My game used a normal while loop, which browsers don't like, so I compiled with Emscripten's ASYNCIFY option instead of rewriting it. I also hit a version mismatch: my desktop project used raylib 6.0 headers but my web library was 5.5, so I had to compile against the matching ones. Even the build script caught me out. On Windows, emcc is a batch file, so without "call" in front of it my script just stopped after compiling and never packaged the build.
 
-1. Reseeds the generator with `seed XOR (floor × constant)`, so floor 3 of a seed is always the same floor 3.
-2. Fills the 40×40 map with walls.
-3. Tries up to 400 times to place rooms that don't overlap (`RoomOverlaps`), up to 12 of them, carving each one out.
-4. Joins each new room to the previous one with an L-shaped corridor (`CarveCorridor`, `CarveRow`, `CarveColumn`).
-5. Puts the player in the first room and the stairs in the last room.
-6. Places enemies (never in the starting room) and 2–3 potions.
+## What I learned
 
-`InitRun` resets everything for a new run and generates floor 1.
-
-### 5. Field of view
-
-- `ComputeVisibility` checks every tile inside the light radius.
-- `LineOfSight` draws a straight line (Bresenham's line algorithm) from the player to that tile. If it hits a wall first, the tile is hidden.
-- Visible tiles are also marked as **seen**, so they stay on the map as wireframes after you leave.
-
-### 6. Turns
-
-| Function          | What it does |
-|-------------------|--------------|
-| `PlayerTakeTurn`  | Moves the player, attacks an enemy if one is in the way, picks up potions, and takes the stairs. Then runs the enemies' turn |
-| `EnemiesTakeTurn` | Each enemy attacks if next to you, chases if it's in your light, or sometimes wanders. Brutes skip every other turn |
-| `Descend`         | Goes to the next floor, or wins the game after floor 10 |
-
-Combat rolls and wandering use the same seeded generator. The same seed plus the same key presses always plays out the same way.
-
-### 7. Drawing
-
-- `DrawWorld` draws the 3D scene:
-  - Walls are cubes that fade from white to dark the further they are from you (a simple fake fog).
-  - Walls just in front of the camera are drawn as wireframes so they never hide the player.
-  - Only walls next to a floor are drawn, so solid rock isn't rendered.
-  - On the title screen the same function draws the whole map as wireframe (`revealAll`).
-- `DrawHud`, `DrawBar`, `DrawEnemyHealthBars` and `DrawEndPanel` draw the 2D interface on top.
-- `Grey()` builds the grey shades. Only black, white and greys are used anywhere.
-
-### 8. Main loop
-
-`main` opens the window, then every frame:
-
-1. **Update**: handles input for the current screen (title, playing, dead, won).
-2. **Animate**: slides the player and enemies smoothly towards their grid squares, fades out hit flashes, and moves the camera. On the title screen the camera slowly orbits the map.
-3. **Draw**: draws the 3D world, then the UI.
-
----
-
-## Notes
-
-- The time of day comes from your computer's time zone. Someone in a different time zone may get a different phase, with different light and enemy numbers, from the same seed.
-- Seeds are 32-bit numbers (0 to 4,294,967,295). Typed seeds bigger than that are capped.
-
-## Credits
-
-Made with [raylib](https://www.raylib.com/) by Ramon Santamaria (zlib licence).
+The biggest lesson was to build the systems first and worry about looks later. Because I prototyped in 2D, going 3D was polish rather than a rewrite. I also learned a lot about seeded randomness. I wrote my own xorshift generator instead of using rand(), so the same seed gives the same dungeon on any machine, which is what makes sharing seeds work. Finally, I learned that "it works on my machine" means very little for web builds, and testing in the browser earlier would have saved me a lot of time at the end.
