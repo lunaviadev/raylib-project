@@ -108,7 +108,7 @@ raylib is in the repo so the project builds on any Windows machine with GCC, wit
 
 ---
 
-# Dev Log: Dungeon of Time
+# Dungeon of Time
 
 ![Dungeon of Time running in the browser](WEBGIF.gif)
 game running in web
@@ -116,22 +116,11 @@ game running in web
 https://lunavia.itch.io/dungeon-of-time
 password to access website is : UCAPW123
 
-## The plan
+### AI DECLARATION: 
 
-When I first read the brief I wanted something small that still felt like a proper game, so I went with a roguelike. The hook came pretty quickly: what if the dungeon was seeded by the time on your clock? That way the data isn't just decoration. It decides the whole run, from the layout to the enemies to how dark it is. Playing at night gives you a smaller light radius and more enemies, so real-world data changes the mechanics, not just the background.
+Instructions for running and compiling were written with the assistance of Claude Opus 5.5 
 
-## Starting in 2D
+Debugging / Error fixing was assisted by Claude Opus 5.5 in order to speed up the development pipeline. 
 
-I prototyped everything in 2D first, which was honestly the right call, because the hard part of a roguelike is the systems, not the visuals. I got room placement, corridors, turn-based movement, combat and field of view working with just coloured squares. Field of view took the longest. I used Bresenham's line algorithm to check line of sight to each tile, which I'd heard of before but never actually implemented. I also had to add a real web request. My first choice, worldtimeapi.org, failed in the browser because of CORS, so I switched to time.now, which returns the time and UTC offset for your location. I used Emscripten's fetch API so the request runs in the background, with the computer's clock as a fallback if it fails.
+All other code is hand written. 
 
-## Moving to 3D
-
-Once it was playable it felt a bit flat, and raylib makes basic 3D pretty approachable, so I decided to move it to 3D. Because all the logic was grid-based, the swap was mostly a rendering change: tiles became cubes, the player became a sphere, and a camera follows behind. The real problems were about readability. Walls kept hiding the player, so I made walls near the camera draw as wireframes. I faked fog by fading walls to dark with distance, and kept everything black and white so it looked deliberate rather than unfinished. I also added smooth sliding between squares so movement didn't feel like teleporting.
-
-## Getting it in the browser
-
-The web build was where most of my unexpected time went. My game used a normal while loop, which browsers don't like, so I compiled with Emscripten's ASYNCIFY option instead of rewriting it. I also hit a version mismatch: my desktop project used raylib 6.0 headers but my web library was 5.5, so I had to compile against the matching ones. Even the build script caught me out. On Windows, emcc is a batch file, so without "call" in front of it my script just stopped after compiling and never packaged the build.
-
-## What I learned
-
-The biggest lesson was to build the systems first and worry about looks later. Because I prototyped in 2D, going 3D was polish rather than a rewrite. I also learned a lot about seeded randomness. I wrote my own xorshift generator instead of using rand(), so the same seed gives the same dungeon on any machine, which is what makes sharing seeds work. Finally, I learned that "it works on my machine" means very little for web builds, and testing in the browser earlier would have saved me a lot of time at the end.
